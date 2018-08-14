@@ -33,17 +33,22 @@ monodepth_parameters = namedtuple('parameters',
                         'alpha_image_loss, '
                         'disp_gradient_loss_weight, '
                         'lr_loss_weight, '
-                        'full_summary')
+                        'full_summary, '
+                        'equirectangular_mode, '
+                        'fov'
+                        )
 
 class MonodepthModel(object):
     """monodepth model"""
 
-    def __init__(self, params, mode, left, right, reuse_variables=None, model_index=0):
+    def __init__(self, params, mode, left, right, reuse_variables=None, model_index=0, use_ring_pad=False):
         self.params = params
         self.mode = mode
         self.left = left
         self.right = right
         self.model_collection = ['model_' + str(model_index)]
+
+        self.use_ring_pad = use_ring_pad
 
         self.reuse_variables = reuse_variables
 
@@ -83,10 +88,16 @@ class MonodepthModel(object):
         return scaled_imgs
 
     def generate_image_left(self, img, disp):
-        return bilinear_sampler_1d_h(img, -disp)
+        if self.params.equirectangular_mode:
+            return bilinear_sampler_equirectangular(img, -disp, self.params.fov)
+        else:
+            return bilinear_sampler_1d_h(img, -disp, self.params.fov)
 
     def generate_image_right(self, img, disp):
-        return bilinear_sampler_1d_h(img, disp)
+        if self.params.equirectangular_mode:
+            return bilinear_sampler_equirectangular(img, disp)
+        else:
+            return bilinear_sampler_1d_h(img, disp)
 
     def SSIM(self, x, y):
         C1 = 0.01 ** 2
@@ -124,9 +135,24 @@ class MonodepthModel(object):
         disp = 0.3 * self.conv(x, 2, 3, 1, tf.nn.sigmoid)
         return disp
 
+    def padding(self, x, p):
+        if self.use_ring_pad:
+            # Vertical padding with zeros
+            p_x = tf.pad(x, [[0, 0], [p, p], [0, 0], [0, 0]])
+            # Horizontal padding with the other side
+            left = p_x[:,:,:p,:]
+            right = p_x[:,:,-p:,:]
+            p_x = tf.concat([right, p_x, left], axis=2)
+        else:
+            p_x = tf.pad(x, [[0, 0], [p, p], [p, p], [0, 0]])
+
+        return p_x
+
     def conv(self, x, num_out_layers, kernel_size, stride, activation_fn=tf.nn.elu):
         p = np.floor((kernel_size - 1) / 2).astype(np.int32)
-        p_x = tf.pad(x, [[0, 0], [p, p], [p, p], [0, 0]])
+
+        p_x = self.padding(x, p)
+
         return slim.conv2d(p_x, num_out_layers, kernel_size, stride, 'VALID', activation_fn=activation_fn)
 
     def conv_block(self, x, num_out_layers, kernel_size):
@@ -136,7 +162,7 @@ class MonodepthModel(object):
 
     def maxpool(self, x, kernel_size):
         p = np.floor((kernel_size - 1) / 2).astype(np.int32)
-        p_x = tf.pad(x, [[0, 0], [p, p], [p, p], [0, 0]])
+        p_x = self.padding(x, p)
         return slim.max_pool2d(p_x, kernel_size)
 
     def resconv(self, x, num_layers, stride):
@@ -164,7 +190,7 @@ class MonodepthModel(object):
         return conv
 
     def deconv(self, x, num_out_layers, kernel_size, scale):
-        p_x = tf.pad(x, [[0, 0], [1, 1], [1, 1], [0, 0]])
+        p_x = self.padding(x, 1)
         conv = slim.conv2d_transpose(p_x, num_out_layers, kernel_size, scale, 'SAME')
         return conv[:,3:-1,3:-1,:]
 

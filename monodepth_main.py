@@ -50,6 +50,8 @@ parser.add_argument('--log_directory',             type=str,   help='directory t
 parser.add_argument('--checkpoint_path',           type=str,   help='path to a specific checkpoint to load', default='')
 parser.add_argument('--retrain',                               help='if used with checkpoint_path, will restart training from step zero', action='store_true')
 parser.add_argument('--full_summary',                          help='if set, will keep more data for each summary. Warning: the file can become very large', action='store_true')
+parser.add_argument('--rectilinear_mode',                      help='rectilinear mode', action='store_true')
+parser.add_argument('--fov',             type=float, help='Horizontal field of view (in degrees)', default=82.5)
 
 args = parser.parse_args()
 
@@ -95,6 +97,9 @@ def train(params):
         dataloader = MonodepthDataloader(args.data_path, args.filenames_file, params, args.dataset, args.mode)
         left  = dataloader.left_image_batch
         right = dataloader.right_image_batch
+
+        left = tf.image.rgb_to_grayscale(left)
+        right = tf.image.rgb_to_grayscale(right)
 
         # split for each gpu
         left_splits  = tf.split(left,  args.num_gpus, 0)
@@ -241,7 +246,9 @@ def main(_):
         alpha_image_loss=args.alpha_image_loss,
         disp_gradient_loss_weight=args.disp_gradient_loss_weight,
         lr_loss_weight=args.lr_loss_weight,
-        full_summary=args.full_summary)
+        equirectangular_mode=not args.rectilinear_mode,
+        full_summary=args.full_summary,
+        fov=args.fov)
 
     if args.mode == 'train':
         train(params)
